@@ -1849,6 +1849,28 @@ function confirmClearAll() {
 }
 
 // ─── OUTPUT VIEWER ─────────────────────────────────────────────────────
+async function resizeTmux(agentName, cols, rows) {
+  try {
+    await fetch(`/api/agents/${agentName}/resize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cols, rows }),
+    });
+  } catch (e) {
+    console.error('Resize error:', e);
+  }
+}
+
+function measureCharWidth() {
+  const span = document.createElement('span');
+  span.style.cssText = 'font-family:var(--font);font-size:12px;position:absolute;visibility:hidden;white-space:pre';
+  span.textContent = 'MMMMMMMMMM';
+  document.body.appendChild(span);
+  const w = span.offsetWidth / 10;
+  document.body.removeChild(span);
+  return w;
+}
+
 async function openOutputViewer(agentName) {
   currentOutputAgent = agentName;
   const agent = agents.find(a => a.name === agentName);
@@ -1856,6 +1878,14 @@ async function openOutputViewer(agentName) {
     `OUTPUT: ${agent ? agent.label : agentName}`;
   document.getElementById('outputOverlay').classList.add('active');
   document.getElementById('outputPromptInput').value = '';
+
+  // Resize tmux pane to match output container width
+  const container = document.getElementById('outputContent');
+  const charW = measureCharWidth();
+  const paddingOffset = 48;
+  const cols = Math.floor((container.clientWidth - paddingOffset) / charW);
+  await resizeTmux(agentName, cols);
+
   await updateOutputViewer();
 
   // Poll for output updates
@@ -1975,6 +2005,9 @@ async function sendKeyFromOutput(key) {
 }
 
 function closeOutputViewer() {
+  if (currentOutputAgent) {
+    resizeTmux(currentOutputAgent, 80); // restore compact width
+  }
   currentOutputAgent = null;
   document.getElementById('outputOverlay').classList.remove('active');
   if (outputPollTimer) {
