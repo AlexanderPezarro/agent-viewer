@@ -998,6 +998,25 @@ app.post('/api/agents/:name/plan-feedback', async (req, res) => {
   }
 });
 
+const MIN_COLS = 40, MAX_COLS = 500;
+const MIN_ROWS = 10, MAX_ROWS = 200;
+
+app.post('/api/agents/:name/resize', (req, res) => {
+  try {
+    const { cols = 80, rows = 50 } = req.body || {};
+    const clampedCol = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
+    const clampedRow = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
+    execSync(`tmux resize-window -t ${req.params.name} -x ${clampedCol} -y ${clampedRow} 2>/dev/null`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    console.log(`[RESIZE] ${req.params.name} -> ${clampedCol}x${clampedRow}`);
+    res.json({ status: 'resized', cols: clampedCol, rows: clampedRow });
+  } catch (e) {
+    console.log(`[RESIZE] Failed for ${req.params.name}: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/agents/:name/output', (req, res) => {
   try {
     const raw = capturePaneOutput(req.params.name, 200);
