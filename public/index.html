@@ -664,7 +664,7 @@ header .status-bar .dot {
   font-size: 13px;
 }
 
-.output-prompt input {
+.output-prompt textarea {
   flex: 1;
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -673,9 +673,14 @@ header .status-bar .dot {
   font-size: 13px;
   padding: 10px 12px;
   outline: none;
+  resize: none;
+  overflow-y: hidden;
+  min-height: 38px;
+  max-height: 120px;
+  line-height: 1.4;
 }
 
-.output-prompt input:focus {
+.output-prompt textarea:focus {
   border-color: var(--green);
 }
 
@@ -1087,7 +1092,7 @@ header .status-bar .dot {
     font-size: 14px;
   }
 
-  .output-prompt input {
+  .output-prompt textarea {
     font-size: 16px; /* prevents iOS zoom */
     padding: 12px;
     -webkit-appearance: none;
@@ -1382,8 +1387,8 @@ header .status-bar .dot {
   <div class="key-controls" id="outputKeyControls" style="display:none"></div>
   <div class="output-prompt">
     <span class="prefix">&gt;_</span>
-    <input type="text" id="outputPromptInput" placeholder="Send a message..."
-           onkeydown="if(event.key==='Enter'){sendFromOutput();}" />
+    <textarea id="outputPromptInput" placeholder="Send a message..." rows="1"
+              onkeydown="handleOutputInputKeydown(event)"></textarea>
     <button onclick="sendFromOutput()">SEND</button>
   </div>
 </div>
@@ -1877,7 +1882,9 @@ async function openOutputViewer(agentName) {
   document.getElementById('outputTitle').textContent =
     `OUTPUT: ${agent ? agent.label : agentName}`;
   document.getElementById('outputOverlay').classList.add('active');
-  document.getElementById('outputPromptInput').value = '';
+  const promptInput = document.getElementById('outputPromptInput');
+  promptInput.value = '';
+  promptInput.style.height = 'auto';
 
   // Resize tmux pane to match output container width
   const container = document.getElementById('outputContent');
@@ -2016,12 +2023,53 @@ function closeOutputViewer() {
   }
 }
 
+function handleOutputInputKeydown(event) {
+  const textarea = event.target;
+  const isEmpty = textarea.value.trim() === '';
+
+  // Shift+Enter: insert newline (default textarea behavior)
+  if (event.key === 'Enter' && event.shiftKey) {
+    // Allow default — inserts newline
+    setTimeout(() => autoResizeTextarea(textarea), 0);
+    return;
+  }
+
+  // Enter (no shift): send message or forward to tmux if empty
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (isEmpty) {
+      sendKeyFromOutput('Enter');
+    } else {
+      sendFromOutput();
+    }
+    return;
+  }
+
+  // When input is empty, forward navigation keys directly to tmux
+  if (isEmpty && ['ArrowUp', 'ArrowDown', 'Tab', 'Backspace', 'Escape'].includes(event.key)) {
+    event.preventDefault();
+    const keyMap = { ArrowUp: 'Up', ArrowDown: 'Down', Tab: 'Tab', Backspace: 'BSpace', Escape: 'Escape' };
+    sendKeyFromOutput(keyMap[event.key]);
+    return;
+  }
+
+  // Auto-resize on any other input
+  setTimeout(() => autoResizeTextarea(textarea), 0);
+}
+
+function autoResizeTextarea(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  textarea.style.overflowY = textarea.scrollHeight > 120 ? 'auto' : 'hidden';
+}
+
 async function sendFromOutput() {
   if (!currentOutputAgent) return;
   const input = document.getElementById('outputPromptInput');
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
+  autoResizeTextarea(input);
 
   // Check if plan prompt is active - route to plan-feedback endpoint
   const agent = agents.find(a => a.name === currentOutputAgent);
@@ -2250,9 +2298,7 @@ function onDrop(event) {
 // ─── KEYBOARD SHORTCUTS ───────────────────────────────────────────────
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
-    if (document.getElementById('outputOverlay').classList.contains('active')) {
-      closeOutputViewer();
-    } else if (document.getElementById('spawnModal').classList.contains('active')) {
+    if (document.getElementById('spawnModal').classList.contains('active')) {
       closeSpawnModal();
     } else if (document.getElementById('confirmOverlay').classList.contains('active')) {
       closeConfirm();
