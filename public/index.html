@@ -1128,6 +1128,11 @@ header .status-bar .dot {
     font-size: 13px;
   }
 
+  /* Show arrow select buttons on mobile (hidden on desktop) */
+  .key-controls button.kc-select {
+    display: inline-block;
+  }
+
   /* Disable drag on mobile */
   .card[draggable] {
     -webkit-user-drag: none;
@@ -1174,6 +1179,10 @@ header .status-bar .dot {
 
 .key-controls button:active {
   transform: scale(0.95);
+}
+
+.key-controls button.kc-select {
+  display: none;
 }
 
 /* ─── FOLDER PICKER ────────────────────────────────────────────────── */
@@ -1549,39 +1558,39 @@ function renderCard(agent) {
     if (promptType === 'select') {
       buttons = `
         <span class="kc-label">SELECT:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selection">ENTER</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
+        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
         <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
     } else if (promptType === 'multiselect') {
       buttons = `
         <span class="kc-label">MULTI-SELECT:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
         <button onclick="sendKey('${n}', 'Space')" title="Toggle selection">SPACE</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selections">ENTER</button>
+        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
         <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
     } else if (promptType === 'permission') {
       buttons = `
         <span class="kc-label">PERMISSION:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm">ENTER</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
+        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
         <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
     } else if (promptType === 'plan') {
       buttons = `
         <span class="kc-label">PLAN:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selection">ENTER</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
+        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
         <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>
         <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
     } else if (promptType === 'yesno') {
       buttons = `
         <span class="kc-label">CONFIRM:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm">ENTER</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
+        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
+        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
         <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
     }
     keyControlsBlock = `<div class="key-controls">${buttons}</div>`;
@@ -1954,39 +1963,39 @@ function updateOutputKeyControls() {
   if (pType === 'select') {
     buttons = `
       <span class="kc-label">SELECT:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selection">ENTER</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
       <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
   } else if (pType === 'multiselect') {
     buttons = `
       <span class="kc-label">MULTI-SELECT:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
       <button onclick="sendKeyFromOutput('Space')" title="Toggle selection">SPACE</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selections">ENTER</button>
+      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
       <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
   } else if (pType === 'permission') {
     buttons = `
       <span class="kc-label">PERMISSION:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm">ENTER</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
       <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
   } else if (pType === 'plan') {
     buttons = `
       <span class="kc-label">PLAN:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selection">ENTER</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
       <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>
       <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
   } else if (pType === 'yesno') {
     buttons = `
       <span class="kc-label">CONFIRM:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm">ENTER</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
       <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
   }
 
