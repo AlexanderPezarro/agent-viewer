@@ -1565,6 +1565,7 @@ function renderCard(agent) {
     ? `<div class="activity">${lastActHtml}</div>`
     : '';
 
+  const promptType = agent.promptType || detectPromptTypeFromText(agent.lastActivity || '');
   const keyControlsBlock = '';
 
   // Prompt input for all agents
