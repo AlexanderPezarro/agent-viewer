@@ -1128,11 +1128,6 @@ header .status-bar .dot {
     font-size: 13px;
   }
 
-  /* Show arrow select buttons on mobile (hidden on desktop) */
-  .key-controls button.kc-select {
-    display: inline-block;
-  }
-
   /* Disable drag on mobile */
   .card[draggable] {
     -webkit-user-drag: none;
@@ -1183,6 +1178,28 @@ header .status-bar .dot {
 
 .key-controls button.kc-select {
   display: none;
+}
+
+/* Key controls: hidden on desktop until prompt detected */
+#outputKeyControls {
+  display: none;
+}
+#outputKeyControls.kc-active {
+  display: flex;
+}
+
+@media (max-width: 768px) {
+  .key-controls button.kc-select {
+    display: inline-block;
+  }
+  /* Always show output key controls on mobile */
+  #outputKeyControls {
+    display: flex;
+  }
+  /* Hide labels on mobile — just show buttons */
+  .key-controls .kc-label {
+    display: none;
+  }
 }
 
 /* ─── FOLDER PICKER ────────────────────────────────────────────────── */
@@ -1393,7 +1410,7 @@ header .status-bar .dot {
     <button class="close-btn" onclick="closeOutputViewer()">[X] CLOSE</button>
   </div>
   <div class="output-content" id="outputContent"></div>
-  <div class="key-controls" id="outputKeyControls" style="display:none"></div>
+  <div class="key-controls" id="outputKeyControls"></div>
   <div class="output-prompt">
     <span class="prefix">&gt;_</span>
     <textarea id="outputPromptInput" placeholder="Send a message..." rows="1"
@@ -1548,53 +1565,7 @@ function renderCard(agent) {
     ? `<div class="activity">${lastActHtml}</div>`
     : '';
 
-  // Interactive key controls for selection/permission prompts
-  // Use server-side detection, with client-side fallback from activity text
-  const promptType = agent.promptType || detectPromptTypeFromText(agent.lastActivity || '');
-  let keyControlsBlock = '';
-  if (promptType) {
-    let buttons = '';
-    const n = agent.name;
-    if (promptType === 'select') {
-      buttons = `
-        <span class="kc-label">SELECT:</span>
-        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'multiselect') {
-      buttons = `
-        <span class="kc-label">MULTI-SELECT:</span>
-        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Space')" title="Toggle selection">SPACE</button>
-        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'permission') {
-      buttons = `
-        <span class="kc-label">PERMISSION:</span>
-        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'plan') {
-      buttons = `
-        <span class="kc-label">PLAN:</span>
-        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>
-        <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
-    } else if (promptType === 'yesno') {
-      buttons = `
-        <span class="kc-label">CONFIRM:</span>
-        <button class="kc-select" onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button class="kc-select" onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Tab')" title="Next option">TAB</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    }
-    keyControlsBlock = `<div class="key-controls">${buttons}</div>`;
-  }
+  const keyControlsBlock = '';
 
   // Prompt input for all agents
   const placeholders = {
@@ -1947,64 +1918,40 @@ function updateOutputKeyControls() {
   let pType = agent ? agent.promptType : null;
 
   if (!pType) {
-    // Detect from the output content text directly
     const outputEl = document.getElementById('outputContent');
     if (outputEl) {
       pType = detectPromptTypeFromText(outputEl.textContent || '');
     }
   }
 
-  if (!pType) {
-    kcEl.style.display = 'none';
-    return;
-  }
-
-  let buttons = '';
+  // Always render base buttons (shown on mobile via CSS)
+  // Add label + extras only when a prompt type is detected (shown on desktop)
+  let label = '';
+  let extras = '';
   if (pType === 'select') {
-    buttons = `
-      <span class="kc-label">SELECT:</span>
-      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">SELECT:</span>`;
   } else if (pType === 'multiselect') {
-    buttons = `
-      <span class="kc-label">MULTI-SELECT:</span>
-      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Space')" title="Toggle selection">SPACE</button>
-      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">MULTI-SELECT:</span>`;
+    extras = `<button onclick="sendKeyFromOutput('Space')" title="Toggle selection">SPACE</button>`;
   } else if (pType === 'permission') {
-    buttons = `
-      <span class="kc-label">PERMISSION:</span>
-      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">PERMISSION:</span>`;
   } else if (pType === 'plan') {
-    buttons = `
-      <span class="kc-label">PLAN:</span>
-      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>
-      <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
+    label = `<span class="kc-label">PLAN:</span>`;
+    extras = `<span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
   } else if (pType === 'yesno') {
-    buttons = `
-      <span class="kc-label">CONFIRM:</span>
-      <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">CONFIRM:</span>`;
   }
 
-  if (buttons) {
-    kcEl.innerHTML = buttons;
-    kcEl.style.display = 'flex';
-  } else {
-    kcEl.style.display = 'none';
-  }
+  kcEl.innerHTML = `
+    ${label}
+    <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+    <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+    ${extras}
+    <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
+    <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+
+  // On desktop, only show when a prompt type is detected
+  kcEl.classList.toggle('kc-active', !!pType);
 
   // Update output prompt placeholder based on prompt type
   const outputInput = document.getElementById('outputPromptInput');
