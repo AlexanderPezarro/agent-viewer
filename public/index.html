@@ -1358,6 +1358,19 @@ header .status-bar .dot {
         <div class="folder-picker" id="folderPicker"></div>
       </div>
       <div class="form-field">
+        <label>MODEL</label>
+        <div class="input-row">
+          <span class="input-prefix">⚙</span>
+          <select id="spawnModel">
+            <option value="">default</option>
+            <option value="opus">opus (slowest, smartest)</option>
+            <option value="sonnet">sonnet (balanced)</option>
+            <option value="haiku">haiku (fastest)</option>
+            <option value="max">max (claude max)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field">
         <label>PROMPT</label>
         <div class="input-row" style="align-items:start">
           <span class="input-prefix" style="padding-top:10px">&gt;_</span>
@@ -1521,6 +1534,9 @@ function renderCard(agent) {
 
   let metaLines = '';
   metaLines += `<div class="meta">PROJECT: <span>${escapeHtml(projectName)}</span></div>`;
+  if (agent.model) {
+    metaLines += `<div class="meta">MODEL: <span style="color:var(--amber)">${escapeHtml(agent.model.toUpperCase())}</span></div>`;
+  }
   metaLines += `<div class="meta">UPTIME: <span>${uptime}</span></div>`;
 
   if (agent.state === 'idle') {
@@ -1666,6 +1682,7 @@ function renderCard(agent) {
 async function spawnAgent() {
   const projectPath = document.getElementById('spawnProject').value.trim();
   const prompt = document.getElementById('spawnPrompt').value.trim();
+  const model = document.getElementById('spawnModel').value;
 
   if (!projectPath || !prompt) {
     alert('Project path and prompt are required');
@@ -1676,7 +1693,7 @@ async function spawnAgent() {
     const res = await fetch('/api/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectPath, prompt }),
+      body: JSON.stringify({ projectPath, prompt, model: model || undefined }),
     });
     const data = await res.json();
     if (data.error) {

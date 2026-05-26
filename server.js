@@ -52,12 +52,20 @@ function fallbackLabel(text) {
 
 function callClaude(systemPrompt, userText) {
   return new Promise((resolve, reject) => {
+    // Write prompt to temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/agent-viewer-label-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
     const prompt = `${systemPrompt}\n\n${userText}`;
-    const escaped = prompt.replace(/'/g, "'\\''");
+    try {
+      fs.writeFileSync(tmpFile, prompt, 'utf-8');
+    } catch (e) {
+      return reject(e);
+    }
     exec(
-      `echo '${escaped}' | claude --print --model haiku 2>/dev/null`,
+      `claude --print --model haiku < '${tmpFile}' 2>/dev/null; rm -f '${tmpFile}'`,
       { encoding: 'utf-8', timeout: 15000 },
       (err, stdout) => {
+        // Clean up temp file even on error
+        try { fs.unlinkSync(tmpFile); } catch {}
         if (err) {
           console.log(`[LABEL-CLI] Failed: ${err.message.substring(0, 100)}`);
           return reject(err);
@@ -100,10 +108,25 @@ async function refreshDiscoveredLabel(sessionName) {
 
   reg.labelRefreshed = true;
   try {
-    const label = await callClaude(
-      'This is terminal output from a Claude Code AI agent working on a coding task. Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing what this agent is doing. Reply with ONLY the label.',
-      output.substring(0, 500)
-    );
+    // Write prompt to temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/agent-viewer-label-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    const prompt = `This is terminal output from a Claude Code AI agent working on a coding task. Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing what this agent is doing. Reply with ONLY the label.\n\n${output.substring(0, 500)}`;
+    fs.writeFileSync(tmpFile, prompt, 'utf-8');
+    
+    const label = await new Promise((resolve, reject) => {
+      exec(
+        `claude --print --model haiku < '${tmpFile}' 2>/dev/null; rm -f '${tmpFile}'`,
+        { encoding: 'utf-8', timeout: 15000 },
+        (err, stdout) => {
+          try { fs.unlinkSync(tmpFile); } catch {}
+          if (err) {
+            console.log(`[LABEL-CLI] Failed: ${err.message.substring(0, 100)}`);
+            return reject(err);
+          }
+          resolve(stdout.trim());
+        }
+      );
+    });
     console.log(`[LABEL] Haiku returned for ${sessionName}: "${label}"`);
     const clean = label.toLowerCase().replace(/[^a-z0-9-\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (clean && clean.length > 2 && clean.length < 60) {
@@ -239,7 +262,7 @@ function isProcessAlive(pid) {
  * Poll tmux pane until Claude Code is ready for input (showing prompt).
  * Returns true if ready, false if timed out.
  */
-async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
+async function waitForClaudeReady(sessionName, timeoutMs = 90000) {
   const pollInterval = 500;
   const maxAttempts = Math.ceil(timeoutMs / pollInterval);
 
@@ -307,7 +330,7 @@ async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
   return false;
 }
 
-async function spawnAgent(projectPath, prompt) {
+async function spawnAgent(projectPath, prompt, model) {
   // Expand ~ to home directory
   if (projectPath.startsWith('~')) {
     projectPath = path.join(os.homedir(), projectPath.slice(1));
@@ -331,7 +354,9 @@ async function spawnAgent(projectPath, prompt) {
     throw new Error(`Project path does not exist: ${projectPath}`);
   }
 
-  const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+  // Build claude command with optional model flag
+  const modelFlag = model ? ` --model ${model}` : '';
+  const claudeCmd = `claude --chrome --dangerously-skip-permissions${modelFlag}`;
   const tmuxCmd = `tmux new-session -d -s ${finalName} -c "${projectPath}" '${claudeCmd}'`;
 
   console.log(`[SPAWN] quickLabel=${quickLabel} name=${finalName}`);
@@ -353,6 +378,7 @@ async function spawnAgent(projectPath, prompt) {
     label: quickLabel,
     projectPath,
     prompt,
+    model: model || null,
     createdAt: Date.now(),
     state: 'running',
     initialPromptSent: false,
@@ -391,11 +417,16 @@ async function spawnAgent(projectPath, prompt) {
 
 function sendToAgent(sessionName, message) {
   try {
-    const escaped = message.replace(/'/g, "'\\''");
-    const keysCmd = `tmux send-keys -t ${sessionName} -l '${escaped}'`;
+    // Write message to temp file to avoid shell escaping issues with complex prompts
+    const tmpFile = `/tmp/agent-viewer-msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    fs.writeFileSync(tmpFile, message, 'utf-8');
+    
+    const keysCmd = `tmux send-keys -t ${sessionName} -l '< "${tmpFile}"; rm -f "${tmpFile}"'`;
     console.log(`[SEND] to ${sessionName}: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
     console.log(`[SEND] keys cmd: ${keysCmd.substring(0, 120)}...`);
     execSync(keysCmd, { encoding: 'utf-8', timeout: 5000 });
+    
+    // Press Enter to submit
     execSync(
       `tmux send-keys -t ${sessionName} Enter`,
       { encoding: 'utf-8', timeout: 5000 }
@@ -635,6 +666,7 @@ function buildAgentInfo(sessionName, sessionsCache) {
     label: reg.label || sessionName,
     projectPath: reg.projectPath || '',
     prompt: reg.prompt || '',
+    model: reg.model || null,
     state,
     promptType,
     createdAt: reg.createdAt || 0,
@@ -736,11 +768,11 @@ app.get('/api/agents', (req, res) => {
 
 app.post('/api/agents', async (req, res) => {
   try {
-    const { projectPath, prompt } = req.body;
+    const { projectPath, prompt, model } = req.body;
     if (!projectPath || !prompt) {
       return res.status(400).json({ error: 'projectPath and prompt are required' });
     }
-    const name = await spawnAgent(projectPath, prompt);
+    const name = await spawnAgent(projectPath, prompt, model);
     res.json({ name, status: 'spawned' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -760,7 +792,8 @@ app.post('/api/agents/:name/send', (req, res) => {
     // If agent is completed/dead, re-spawn it in the same project
     if (reg && reg.state === 'completed') {
       const projectPath = reg.projectPath || '.';
-      const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+      const modelFlag = reg.model ? ` --model ${reg.model}` : '';
+      const claudeCmd = `claude --chrome --dangerously-skip-permissions${modelFlag}`;
 
       execSync(
         `tmux new-session -d -s ${name} -c "${projectPath}" '${claudeCmd}'`,
@@ -979,9 +1012,10 @@ app.post('/api/agents/:name/plan-feedback', async (req, res) => {
     // Wait for the text input to appear
     await new Promise(r => setTimeout(r, 500));
 
-    // Type the feedback
-    const escaped = message.replace(/'/g, "'\\''");
-    execSync(`tmux send-keys -t ${name} -l '${escaped}'`, { encoding: 'utf-8', timeout: 5000 });
+    // Type the feedback via temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/agent-viewer-feedback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    fs.writeFileSync(tmpFile, message, 'utf-8');
+    execSync(`tmux send-keys -t ${name} -l 'cat ${tmpFile} && rm ${tmpFile}'`, { encoding: 'utf-8', timeout: 5000 });
 
     // Submit
     execSync(`tmux send-keys -t ${name} Enter`, { encoding: 'utf-8', timeout: 3000 });
