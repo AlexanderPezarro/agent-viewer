@@ -417,6 +417,14 @@ async function spawnAgent(projectPath, prompt, model) {
       console.log(`[SPAWN] send result: ${sent}`);
       if (registry[finalName]) {
         registry[finalName].initialPromptSent = true;
+        // Set lastMessageSentAt to engage the 10s "running" grace period
+        // (mirrors the explicit /api/agents/:name/send endpoint behavior).
+        // Without this, state can flip to `idle` during the banner-render
+        // window before claude has even seen the prompt — confusing pollers
+        // that wait for idle.
+        if (sent) {
+          registry[finalName].lastMessageSentAt = Date.now();
+        }
         saveRegistry();
       }
     });
@@ -426,25 +434,37 @@ async function spawnAgent(projectPath, prompt, model) {
 }
 
 function sendToAgent(sessionName, message) {
+  // Write to tmpFile and deliver via tmux paste buffer. Older versions used
+  // `send-keys -l '< "$tmpFile"; rm -f "$tmpFile"'` which assumed claude
+  // expanded `<file` as shell-style file inclusion. Current claude CLI does
+  // not — it treats the literal string as user input and asks for clarification.
+  // load-buffer + paste-buffer types the file content verbatim into the pane.
+  const bufName = `agent-viewer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const tmpFile = `/tmp/${bufName}.txt`;
   try {
-    // Write message to temp file to avoid shell escaping issues with complex prompts
-    const tmpFile = `/tmp/agent-viewer-msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
     fs.writeFileSync(tmpFile, message, 'utf-8');
-    
-    const keysCmd = `tmux send-keys -t ${sessionName} -l '< "${tmpFile}"; rm -f "${tmpFile}"'`;
     console.log(`[SEND] to ${sessionName}: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
-    console.log(`[SEND] keys cmd: ${keysCmd.substring(0, 120)}...`);
-    execSync(keysCmd, { encoding: 'utf-8', timeout: 5000 });
-    
-    // Press Enter to submit
-    execSync(
-      `tmux send-keys -t ${sessionName} Enter`,
-      { encoding: 'utf-8', timeout: 5000 }
-    );
+
+    execSync(`tmux load-buffer -b ${bufName} "${tmpFile}"`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    execSync(`tmux paste-buffer -b ${bufName} -t ${sessionName}`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    // Drop the buffer + temp file regardless of submission outcome.
+    try { execSync(`tmux delete-buffer -b ${bufName}`, { timeout: 3000 }); } catch {}
+    try { fs.unlinkSync(tmpFile); } catch {}
+
+    // Submit
+    execSync(`tmux send-keys -t ${sessionName} Enter`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
     console.log(`[SEND] success`);
     return true;
   } catch (e) {
     console.error(`[SEND] FAILED to ${sessionName}:`, e.message);
+    try { fs.unlinkSync(tmpFile); } catch {}
+    try { execSync(`tmux delete-buffer -b ${bufName}`, { timeout: 3000 }); } catch {}
     return false;
   }
 }
@@ -515,13 +535,18 @@ function detectAgentState(sessionName, sessionsCache) {
   }
 
   // Filter out persistent UI elements (status bar, separators, empty prompt)
-  // to find the actual last content line
+  // and transient post-response status indicators to find the actual last
+  // content line. Claude shows lines like "✻ Churned for 1s" / "✻ Brewed for 2s"
+  // / "✻ Cogitated for 4s" after a turn finishes — these are UI chrome, not
+  // content, so they must not become the "last content line".
   const uiNoise = [
     /bypass permissions/i,
     /shift.?tab to cycle/i,
     /ctrl.?t to hide/i,
     /^[─━═]+$/,
     /^❯\s*$/,
+    /^[✻●◯○]\s+\w+\s+for\s+\d+/i,         // post-response status spinner
+    /for agents/i,                          // "← for agents" footer hint
   ];
   const contentLines = lines.filter(l => !uiNoise.some(p => p.test(l.trim())));
 
@@ -566,7 +591,19 @@ function detectAgentState(sessionName, sessionsCache) {
     return 'idle';
   }
 
-  return 'running';
+  // Default fallback: if we've gotten here, we've already excluded
+  //   - dead session (completed),
+  //   - recent message (running via grace),
+  //   - "esc to interrupt" (true active running),
+  //   - empty pane (running),
+  // and the last content line doesn't match any explicit idle/waiting marker.
+  // claude REPL in this state is sitting at the empty `❯` prompt — return
+  // idle. The previous default of `running` left ended sessions stuck because
+  // claude does not naturally show idle-pattern text after a normal response.
+  // Hermes-side wait_until_idle requires observing `running` first, so a
+  // brief misclassification during in-flight tool calls cannot cause early
+  // return.
+  return 'idle';
 }
 
 /**
@@ -1022,10 +1059,15 @@ app.post('/api/agents/:name/plan-feedback', async (req, res) => {
     // Wait for the text input to appear
     await new Promise(r => setTimeout(r, 500));
 
-    // Type the feedback via temp file to avoid shell escaping issues
-    const tmpFile = `/tmp/agent-viewer-feedback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    // Type the feedback via tmux paste buffer (claude treats literal `cat <file>`
+    // as text, not shell — paste-buffer delivers the file content verbatim).
+    const fbBuf = `agent-viewer-fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tmpFile = `/tmp/${fbBuf}.txt`;
     fs.writeFileSync(tmpFile, message, 'utf-8');
-    execSync(`tmux send-keys -t ${name} -l 'cat ${tmpFile} && rm ${tmpFile}'`, { encoding: 'utf-8', timeout: 5000 });
+    execSync(`tmux load-buffer -b ${fbBuf} "${tmpFile}"`, { encoding: 'utf-8', timeout: 5000 });
+    execSync(`tmux paste-buffer -b ${fbBuf} -t ${name}`, { encoding: 'utf-8', timeout: 5000 });
+    try { execSync(`tmux delete-buffer -b ${fbBuf}`, { timeout: 3000 }); } catch {}
+    try { fs.unlinkSync(tmpFile); } catch {}
 
     // Submit
     execSync(`tmux send-keys -t ${name} Enter`, { encoding: 'utf-8', timeout: 3000 });
