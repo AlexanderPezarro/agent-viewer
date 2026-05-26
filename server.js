@@ -145,10 +145,16 @@ async function refreshDiscoveredLabel(sessionName) {
 // ─── ANSI Stripping ──────────────────────────────────────────────────────────
 
 function stripAnsi(str) {
-  return str.replace(/\x1B(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|\([A-Z0-9])/g, '')
-            .replace(/\x1B\[[\?]?[0-9;]*[a-zA-Z]/g, '')
-            .replace(/\x1B[^[\]()][^\x1B]*/g, '')
-            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  // Robust ANSI stripping — handles CSI, OSC, DCS, APC, and other escape sequences
+  // without eating printable characters
+  return str
+    .replace(/\x1B\][^\x07]*\x07/g, '')   // OSC sequences: ESC ] ... BEL
+    .replace(/\x1B\[[0-9;?]*[a-zA-Z]/g, '') // CSI sequences: ESC [ params final
+    .replace(/\x1B\][^\x1B]*/g, '')        // OSC without BEL
+    .replace(/\x1B[P^_][^\x1B\x1B]*[\x1B\\]/g, '') // DCS/PTR/APM sequences
+    .replace(/\x1B[A-Za-z]/g, '')          // Simple escape sequences
+    .replace(/\x1B\([A-Za-z0-9]/g, '')    // Character set sequences
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''); // Control characters
 }
 
 // ─── Process Tree (for Claude detection) ─────────────────────────────────────
@@ -282,17 +288,21 @@ async function waitForClaudeReady(sessionName, timeoutMs = 90000) {
     // Startup prompts have specific option text we can match on.
     const isTrustPrompt = /No, exit/i.test(recentText) && /Yes, I accept/i.test(recentText);
     const isSettingsError = /Exit and fix manually/i.test(recentText) && /Continue without/i.test(recentText);
+    // Claude Code 2.x Bypass Permissions prompt (shows numbered options 1/2)
+    const isBypassPrompt = /Bypass Permissions/i.test(recentText) && /Enter to confirm/i.test(recentText) && /Esc to cancel/i.test(recentText);
     const isInfoPrompt = /Enter to confirm/i.test(recentText)
-      && !isTrustPrompt && !isSettingsError
+      && !isTrustPrompt && !isSettingsError && !isBypassPrompt
       // Don't auto-dismiss user selection prompts
       && !/space to select/i.test(recentText)
       && !/to navigate/i.test(recentText);
 
-    if (isTrustPrompt || isSettingsError) {
+    if (isTrustPrompt || isSettingsError || isBypassPrompt) {
       console.log(`[SPAWN] Startup prompt detected for ${sessionName}, selecting option 2...`);
       try {
-        execSync(`tmux send-keys -t ${sessionName} Down`, { encoding: 'utf-8', timeout: 3000 });
-        await new Promise(r => setTimeout(r, 200));
+        // Send '2' directly to select option 2, then Enter
+        // (works for both trust prompt and bypass permissions prompt)
+        execSync(`tmux send-keys -t ${sessionName} 2`, { encoding: 'utf-8', timeout: 3000 });
+        await new Promise(r => setTimeout(r, 300));
         execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8', timeout: 3000 });
       } catch (e) {
         console.log(`[SPAWN] Failed to dismiss prompt for ${sessionName}: ${e.message}`);
