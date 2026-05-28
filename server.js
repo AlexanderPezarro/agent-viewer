@@ -20,6 +20,15 @@ const SPAWN_PREFIX = 'agent-';
 let registry = {};
 const nonClaudeCache = new Map(); // sessionName -> timestamp (skip re-checking)
 
+// Detect our own tmux session so we can exclude it from discovery
+let ownTmuxSession = null;
+try {
+  ownTmuxSession = execSync("tmux display-message -p '#{session_name}' 2>/dev/null", {
+    encoding: 'utf-8', timeout: 3000
+  }).trim() || null;
+} catch {}
+if (ownTmuxSession) console.log(`[INIT] Running in tmux session "${ownTmuxSession}", excluding from discovery`);
+
 function loadRegistry() {
   try {
     if (fs.existsSync(REGISTRY_FILE)) {
@@ -732,6 +741,7 @@ function getAllAgents() {
 
   // Discover Claude sessions not yet in registry
   for (const session of sessions) {
+    if (session.name === ownTmuxSession) continue;
     if (registry[session.name]) continue;
 
     // Check non-Claude cache (re-check every 30s)
@@ -1034,7 +1044,7 @@ app.post('/api/agents/:name/keys', (req, res) => {
     }
 
     // Whitelist allowed key names to prevent injection
-    const allowed = ['Up', 'Down', 'Space', 'Enter', 'Escape', 'Tab'];
+    const allowed = ['Up', 'Down', 'Space', 'Enter', 'Escape', 'Tab', 'BSpace'];
     if (!allowed.includes(keys)) {
       return res.status(400).json({ error: `Invalid key. Allowed: ${allowed.join(', ')}` });
     }
@@ -1138,6 +1148,25 @@ app.post('/api/agents/:name/plan-feedback', async (req, res) => {
     console.log(`[PLAN-FEEDBACK] Sent to ${name} (option ${typeHereIdx}): ${message.substring(0, 80)}`);
     res.json({ status: 'sent', optionIndex: typeHereIdx });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const MIN_COLS = 40, MAX_COLS = 500;
+const MIN_ROWS = 10, MAX_ROWS = 200;
+
+app.post('/api/agents/:name/resize', (req, res) => {
+  try {
+    const { cols = 80, rows = 50 } = req.body || {};
+    const clampedCol = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(cols)));
+    const clampedRow = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(rows)));
+    execSync(`tmux resize-window -t ${req.params.name} -x ${clampedCol} -y ${clampedRow} 2>/dev/null`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    console.log(`[RESIZE] ${req.params.name} -> ${clampedCol}x${clampedRow}`);
+    res.json({ status: 'resized', cols: clampedCol, rows: clampedRow });
+  } catch (e) {
+    console.log(`[RESIZE] Failed for ${req.params.name}: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
