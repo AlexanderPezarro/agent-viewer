@@ -52,12 +52,20 @@ function fallbackLabel(text) {
 
 function callClaude(systemPrompt, userText) {
   return new Promise((resolve, reject) => {
+    // Write prompt to temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/agent-viewer-label-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
     const prompt = `${systemPrompt}\n\n${userText}`;
-    const escaped = prompt.replace(/'/g, "'\\''");
+    try {
+      fs.writeFileSync(tmpFile, prompt, 'utf-8');
+    } catch (e) {
+      return reject(e);
+    }
     exec(
-      `echo '${escaped}' | claude --print --model haiku 2>/dev/null`,
+      `claude --print --model haiku < '${tmpFile}' 2>/dev/null; rm -f '${tmpFile}'`,
       { encoding: 'utf-8', timeout: 15000 },
       (err, stdout) => {
+        // Clean up temp file even on error
+        try { fs.unlinkSync(tmpFile); } catch {}
         if (err) {
           console.log(`[LABEL-CLI] Failed: ${err.message.substring(0, 100)}`);
           return reject(err);
@@ -100,10 +108,25 @@ async function refreshDiscoveredLabel(sessionName) {
 
   reg.labelRefreshed = true;
   try {
-    const label = await callClaude(
-      'This is terminal output from a Claude Code AI agent working on a coding task. Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing what this agent is doing. Reply with ONLY the label.',
-      output.substring(0, 500)
-    );
+    // Write prompt to temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/agent-viewer-label-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    const prompt = `This is terminal output from a Claude Code AI agent working on a coding task. Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing what this agent is doing. Reply with ONLY the label.\n\n${output.substring(0, 500)}`;
+    fs.writeFileSync(tmpFile, prompt, 'utf-8');
+    
+    const label = await new Promise((resolve, reject) => {
+      exec(
+        `claude --print --model haiku < '${tmpFile}' 2>/dev/null; rm -f '${tmpFile}'`,
+        { encoding: 'utf-8', timeout: 15000 },
+        (err, stdout) => {
+          try { fs.unlinkSync(tmpFile); } catch {}
+          if (err) {
+            console.log(`[LABEL-CLI] Failed: ${err.message.substring(0, 100)}`);
+            return reject(err);
+          }
+          resolve(stdout.trim());
+        }
+      );
+    });
     console.log(`[LABEL] Haiku returned for ${sessionName}: "${label}"`);
     const clean = label.toLowerCase().replace(/[^a-z0-9-\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (clean && clean.length > 2 && clean.length < 60) {
@@ -122,10 +145,16 @@ async function refreshDiscoveredLabel(sessionName) {
 // ─── ANSI Stripping ──────────────────────────────────────────────────────────
 
 function stripAnsi(str) {
-  return str.replace(/\x1B(?:\[[0-9;]*[a-zA-Z]|\][^\x07]*\x07|\([A-Z0-9])/g, '')
-            .replace(/\x1B\[[\?]?[0-9;]*[a-zA-Z]/g, '')
-            .replace(/\x1B[^[\]()][^\x1B]*/g, '')
-            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  // Robust ANSI stripping — handles CSI, OSC, DCS, APC, and other escape sequences
+  // without eating printable characters
+  return str
+    .replace(/\x1B\][^\x07]*\x07/g, '')   // OSC sequences: ESC ] ... BEL
+    .replace(/\x1B\[[0-9;?]*[a-zA-Z]/g, '') // CSI sequences: ESC [ params final
+    .replace(/\x1B\][^\x1B]*/g, '')        // OSC without BEL
+    .replace(/\x1B[P^_][^\x1B\x1B]*[\x1B\\]/g, '') // DCS/PTR/APM sequences
+    .replace(/\x1B[A-Za-z]/g, '')          // Simple escape sequences
+    .replace(/\x1B\([A-Za-z0-9]/g, '')    // Character set sequences
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''); // Control characters
 }
 
 // ─── Process Tree (for Claude detection) ─────────────────────────────────────
@@ -239,7 +268,7 @@ function isProcessAlive(pid) {
  * Poll tmux pane until Claude Code is ready for input (showing prompt).
  * Returns true if ready, false if timed out.
  */
-async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
+async function waitForClaudeReady(sessionName, timeoutMs = 90000) {
   const pollInterval = 500;
   const maxAttempts = Math.ceil(timeoutMs / pollInterval);
 
@@ -259,17 +288,21 @@ async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
     // Startup prompts have specific option text we can match on.
     const isTrustPrompt = /No, exit/i.test(recentText) && /Yes, I accept/i.test(recentText);
     const isSettingsError = /Exit and fix manually/i.test(recentText) && /Continue without/i.test(recentText);
+    // Claude Code 2.x Bypass Permissions prompt (shows numbered options 1/2)
+    const isBypassPrompt = /Bypass Permissions/i.test(recentText) && /Enter to confirm/i.test(recentText) && /Esc to cancel/i.test(recentText);
     const isInfoPrompt = /Enter to confirm/i.test(recentText)
-      && !isTrustPrompt && !isSettingsError
+      && !isTrustPrompt && !isSettingsError && !isBypassPrompt
       // Don't auto-dismiss user selection prompts
       && !/space to select/i.test(recentText)
       && !/to navigate/i.test(recentText);
 
-    if (isTrustPrompt || isSettingsError) {
+    if (isTrustPrompt || isSettingsError || isBypassPrompt) {
       console.log(`[SPAWN] Startup prompt detected for ${sessionName}, selecting option 2...`);
       try {
-        execSync(`tmux send-keys -t ${sessionName} Down`, { encoding: 'utf-8', timeout: 3000 });
-        await new Promise(r => setTimeout(r, 200));
+        // Send '2' directly to select option 2, then Enter
+        // (works for both trust prompt and bypass permissions prompt)
+        execSync(`tmux send-keys -t ${sessionName} 2`, { encoding: 'utf-8', timeout: 3000 });
+        await new Promise(r => setTimeout(r, 300));
         execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8', timeout: 3000 });
       } catch (e) {
         console.log(`[SPAWN] Failed to dismiss prompt for ${sessionName}: ${e.message}`);
@@ -307,7 +340,7 @@ async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
   return false;
 }
 
-async function spawnAgent(projectPath, prompt) {
+async function spawnAgent(projectPath, prompt, model) {
   // Expand ~ to home directory
   if (projectPath.startsWith('~')) {
     projectPath = path.join(os.homedir(), projectPath.slice(1));
@@ -331,7 +364,9 @@ async function spawnAgent(projectPath, prompt) {
     throw new Error(`Project path does not exist: ${projectPath}`);
   }
 
-  const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+  // Build claude command with optional model flag
+  const modelFlag = model ? ` --model ${model}` : '';
+  const claudeCmd = `claude --chrome --dangerously-skip-permissions${modelFlag}`;
   const tmuxCmd = `tmux new-session -d -s ${finalName} -c "${projectPath}" '${claudeCmd}'`;
 
   console.log(`[SPAWN] quickLabel=${quickLabel} name=${finalName}`);
@@ -353,6 +388,7 @@ async function spawnAgent(projectPath, prompt) {
     label: quickLabel,
     projectPath,
     prompt,
+    model: model || null,
     createdAt: Date.now(),
     state: 'running',
     initialPromptSent: false,
@@ -381,6 +417,14 @@ async function spawnAgent(projectPath, prompt) {
       console.log(`[SPAWN] send result: ${sent}`);
       if (registry[finalName]) {
         registry[finalName].initialPromptSent = true;
+        // Set lastMessageSentAt to engage the 10s "running" grace period
+        // (mirrors the explicit /api/agents/:name/send endpoint behavior).
+        // Without this, state can flip to `idle` during the banner-render
+        // window before claude has even seen the prompt — confusing pollers
+        // that wait for idle.
+        if (sent) {
+          registry[finalName].lastMessageSentAt = Date.now();
+        }
         saveRegistry();
       }
     });
@@ -390,20 +434,37 @@ async function spawnAgent(projectPath, prompt) {
 }
 
 function sendToAgent(sessionName, message) {
+  // Write to tmpFile and deliver via tmux paste buffer. Older versions used
+  // `send-keys -l '< "$tmpFile"; rm -f "$tmpFile"'` which assumed claude
+  // expanded `<file` as shell-style file inclusion. Current claude CLI does
+  // not — it treats the literal string as user input and asks for clarification.
+  // load-buffer + paste-buffer types the file content verbatim into the pane.
+  const bufName = `agent-viewer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const tmpFile = `/tmp/${bufName}.txt`;
   try {
-    const escaped = message.replace(/'/g, "'\\''");
-    const keysCmd = `tmux send-keys -t ${sessionName} -l '${escaped}'`;
+    fs.writeFileSync(tmpFile, message, 'utf-8');
     console.log(`[SEND] to ${sessionName}: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
-    console.log(`[SEND] keys cmd: ${keysCmd.substring(0, 120)}...`);
-    execSync(keysCmd, { encoding: 'utf-8', timeout: 5000 });
-    execSync(
-      `tmux send-keys -t ${sessionName} Enter`,
-      { encoding: 'utf-8', timeout: 5000 }
-    );
+
+    execSync(`tmux load-buffer -b ${bufName} "${tmpFile}"`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    execSync(`tmux paste-buffer -b ${bufName} -t ${sessionName}`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
+    // Drop the buffer + temp file regardless of submission outcome.
+    try { execSync(`tmux delete-buffer -b ${bufName}`, { timeout: 3000 }); } catch {}
+    try { fs.unlinkSync(tmpFile); } catch {}
+
+    // Submit
+    execSync(`tmux send-keys -t ${sessionName} Enter`, {
+      encoding: 'utf-8', timeout: 5000,
+    });
     console.log(`[SEND] success`);
     return true;
   } catch (e) {
     console.error(`[SEND] FAILED to ${sessionName}:`, e.message);
+    try { fs.unlinkSync(tmpFile); } catch {}
+    try { execSync(`tmux delete-buffer -b ${bufName}`, { timeout: 3000 }); } catch {}
     return false;
   }
 }
@@ -474,13 +535,18 @@ function detectAgentState(sessionName, sessionsCache) {
   }
 
   // Filter out persistent UI elements (status bar, separators, empty prompt)
-  // to find the actual last content line
+  // and transient post-response status indicators to find the actual last
+  // content line. Claude shows lines like "✻ Churned for 1s" / "✻ Brewed for 2s"
+  // / "✻ Cogitated for 4s" after a turn finishes — these are UI chrome, not
+  // content, so they must not become the "last content line".
   const uiNoise = [
     /bypass permissions/i,
     /shift.?tab to cycle/i,
     /ctrl.?t to hide/i,
     /^[─━═]+$/,
     /^❯\s*$/,
+    /^[✻●◯○]\s+\w+\s+for\s+\d+/i,         // post-response status spinner
+    /for agents/i,                          // "← for agents" footer hint
   ];
   const contentLines = lines.filter(l => !uiNoise.some(p => p.test(l.trim())));
 
@@ -525,7 +591,19 @@ function detectAgentState(sessionName, sessionsCache) {
     return 'idle';
   }
 
-  return 'running';
+  // Default fallback: if we've gotten here, we've already excluded
+  //   - dead session (completed),
+  //   - recent message (running via grace),
+  //   - "esc to interrupt" (true active running),
+  //   - empty pane (running),
+  // and the last content line doesn't match any explicit idle/waiting marker.
+  // claude REPL in this state is sitting at the empty `❯` prompt — return
+  // idle. The previous default of `running` left ended sessions stuck because
+  // claude does not naturally show idle-pattern text after a normal response.
+  // Hermes-side wait_until_idle requires observing `running` first, so a
+  // brief misclassification during in-flight tool calls cannot cause early
+  // return.
+  return 'idle';
 }
 
 /**
@@ -635,6 +713,7 @@ function buildAgentInfo(sessionName, sessionsCache) {
     label: reg.label || sessionName,
     projectPath: reg.projectPath || '',
     prompt: reg.prompt || '',
+    model: reg.model || null,
     state,
     promptType,
     createdAt: reg.createdAt || 0,
@@ -736,11 +815,11 @@ app.get('/api/agents', (req, res) => {
 
 app.post('/api/agents', async (req, res) => {
   try {
-    const { projectPath, prompt } = req.body;
+    const { projectPath, prompt, model } = req.body;
     if (!projectPath || !prompt) {
       return res.status(400).json({ error: 'projectPath and prompt are required' });
     }
-    const name = await spawnAgent(projectPath, prompt);
+    const name = await spawnAgent(projectPath, prompt, model);
     res.json({ name, status: 'spawned' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -760,7 +839,8 @@ app.post('/api/agents/:name/send', (req, res) => {
     // If agent is completed/dead, re-spawn it in the same project
     if (reg && reg.state === 'completed') {
       const projectPath = reg.projectPath || '.';
-      const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+      const modelFlag = reg.model ? ` --model ${reg.model}` : '';
+      const claudeCmd = `claude --chrome --dangerously-skip-permissions${modelFlag}`;
 
       execSync(
         `tmux new-session -d -s ${name} -c "${projectPath}" '${claudeCmd}'`,
@@ -979,9 +1059,15 @@ app.post('/api/agents/:name/plan-feedback', async (req, res) => {
     // Wait for the text input to appear
     await new Promise(r => setTimeout(r, 500));
 
-    // Type the feedback
-    const escaped = message.replace(/'/g, "'\\''");
-    execSync(`tmux send-keys -t ${name} -l '${escaped}'`, { encoding: 'utf-8', timeout: 5000 });
+    // Type the feedback via tmux paste buffer (claude treats literal `cat <file>`
+    // as text, not shell — paste-buffer delivers the file content verbatim).
+    const fbBuf = `agent-viewer-fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const tmpFile = `/tmp/${fbBuf}.txt`;
+    fs.writeFileSync(tmpFile, message, 'utf-8');
+    execSync(`tmux load-buffer -b ${fbBuf} "${tmpFile}"`, { encoding: 'utf-8', timeout: 5000 });
+    execSync(`tmux paste-buffer -b ${fbBuf} -t ${name}`, { encoding: 'utf-8', timeout: 5000 });
+    try { execSync(`tmux delete-buffer -b ${fbBuf}`, { timeout: 3000 }); } catch {}
+    try { fs.unlinkSync(tmpFile); } catch {}
 
     // Submit
     execSync(`tmux send-keys -t ${name} Enter`, { encoding: 'utf-8', timeout: 3000 });
