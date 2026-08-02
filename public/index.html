@@ -400,6 +400,16 @@ header .status-bar .dot {
   color: var(--bg);
 }
 
+.card-actions .btn-resume {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.card-actions .btn-resume:hover {
+  background: var(--amber);
+  color: var(--bg);
+}
+
 /* ─── SPAWN MODAL ───────────────────────────────────────────────────── */
 .modal-overlay {
   display: none;
@@ -664,7 +674,7 @@ header .status-bar .dot {
   font-size: 13px;
 }
 
-.output-prompt input {
+.output-prompt textarea {
   flex: 1;
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -673,9 +683,14 @@ header .status-bar .dot {
   font-size: 13px;
   padding: 10px 12px;
   outline: none;
+  resize: none;
+  overflow-y: hidden;
+  min-height: 38px;
+  max-height: 120px;
+  line-height: 1.4;
 }
 
-.output-prompt input:focus {
+.output-prompt textarea:focus {
   border-color: var(--green);
 }
 
@@ -1087,7 +1102,7 @@ header .status-bar .dot {
     font-size: 14px;
   }
 
-  .output-prompt input {
+  .output-prompt textarea {
     font-size: 16px; /* prevents iOS zoom */
     padding: 12px;
     -webkit-appearance: none;
@@ -1169,6 +1184,32 @@ header .status-bar .dot {
 
 .key-controls button:active {
   transform: scale(0.95);
+}
+
+.key-controls button.kc-select {
+  display: none;
+}
+
+/* Key controls: hidden on desktop until prompt detected */
+#outputKeyControls {
+  display: none;
+}
+#outputKeyControls.kc-active {
+  display: flex;
+}
+
+@media (max-width: 768px) {
+  .key-controls button.kc-select {
+    display: inline-block;
+  }
+  /* Always show output key controls on mobile */
+  #outputKeyControls {
+    display: flex;
+  }
+  /* Hide labels on mobile — just show buttons */
+  .key-controls .kc-label {
+    display: none;
+  }
 }
 
 /* ─── FOLDER PICKER ────────────────────────────────────────────────── */
@@ -1358,6 +1399,19 @@ header .status-bar .dot {
         <div class="folder-picker" id="folderPicker"></div>
       </div>
       <div class="form-field">
+        <label>MODEL</label>
+        <div class="input-row">
+          <span class="input-prefix">⚙</span>
+          <select id="spawnModel">
+            <option value="">default</option>
+            <option value="opus">opus (slowest, smartest)</option>
+            <option value="sonnet">sonnet (balanced)</option>
+            <option value="haiku">haiku (fastest)</option>
+            <option value="max">max (claude max)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field">
         <label>PROMPT</label>
         <div class="input-row" style="align-items:start">
           <span class="input-prefix" style="padding-top:10px">&gt;_</span>
@@ -1379,11 +1433,11 @@ header .status-bar .dot {
     <button class="close-btn" onclick="closeOutputViewer()">[X] CLOSE</button>
   </div>
   <div class="output-content" id="outputContent"></div>
-  <div class="key-controls" id="outputKeyControls" style="display:none"></div>
+  <div class="key-controls" id="outputKeyControls"></div>
   <div class="output-prompt">
     <span class="prefix">&gt;_</span>
-    <input type="text" id="outputPromptInput" placeholder="Send a message..."
-           onkeydown="if(event.key==='Enter'){sendFromOutput();}" />
+    <textarea id="outputPromptInput" placeholder="Send a message..." rows="1"
+              onkeydown="handleOutputInputKeydown(event)"></textarea>
     <button onclick="sendFromOutput()">SEND</button>
   </div>
 </div>
@@ -1521,6 +1575,9 @@ function renderCard(agent) {
 
   let metaLines = '';
   metaLines += `<div class="meta">PROJECT: <span>${escapeHtml(projectName)}</span></div>`;
+  if (agent.model) {
+    metaLines += `<div class="meta">MODEL: <span style="color:var(--amber)">${escapeHtml(agent.model.toUpperCase())}</span></div>`;
+  }
   metaLines += `<div class="meta">UPTIME: <span>${uptime}</span></div>`;
 
   if (agent.state === 'idle') {
@@ -1534,53 +1591,8 @@ function renderCard(agent) {
     ? `<div class="activity">${lastActHtml}</div>`
     : '';
 
-  // Interactive key controls for selection/permission prompts
-  // Use server-side detection, with client-side fallback from activity text
   const promptType = agent.promptType || detectPromptTypeFromText(agent.lastActivity || '');
-  let keyControlsBlock = '';
-  if (promptType) {
-    let buttons = '';
-    const n = agent.name;
-    if (promptType === 'select') {
-      buttons = `
-        <span class="kc-label">SELECT:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selection">ENTER</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'multiselect') {
-      buttons = `
-        <span class="kc-label">MULTI-SELECT:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Space')" title="Toggle selection">SPACE</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selections">ENTER</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'permission') {
-      buttons = `
-        <span class="kc-label">PERMISSION:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm">ENTER</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    } else if (promptType === 'plan') {
-      buttons = `
-        <span class="kc-label">PLAN:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm selection">ENTER</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>
-        <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
-    } else if (promptType === 'yesno') {
-      buttons = `
-        <span class="kc-label">CONFIRM:</span>
-        <button onclick="sendKey('${n}', 'Up')" title="Move up">&#x2191;</button>
-        <button onclick="sendKey('${n}', 'Down')" title="Move down">&#x2193;</button>
-        <button onclick="sendKey('${n}', 'Enter')" title="Confirm">ENTER</button>
-        <button onclick="sendKey('${n}', 'Escape')" title="Cancel">ESC</button>`;
-    }
-    keyControlsBlock = `<div class="key-controls">${buttons}</div>`;
-  }
+  const keyControlsBlock = '';
 
   // Prompt input for all agents
   const placeholders = {
@@ -1615,13 +1627,15 @@ function renderCard(agent) {
       <div class="card-actions">
         <button class="btn-send" onclick="sendPrompt('${agent.name}')">SEND</button>
         <button onclick="document.getElementById('file-${agent.name}').click()">FILE</button>
-        <button onclick="copyAttach('${agent.name}')">TERMINAL</button>
+        <button onclick="openTerminal('${agent.name}')">TERMINAL</button>
+        <button onclick="copyTmux('${agent.name}')">COPY TMUX</button>
         <button class="btn-stop" onclick="confirmStop('${agent.name}')">STOP</button>
         <button onclick="openOutputViewer('${agent.name}')">VIEW OUTPUT</button>
       </div>`;
   } else {
     actions = `
       <div class="card-actions">
+        <button class="btn-resume" onclick="resumeAgent('${agent.name}')">RESUME</button>
         <button class="btn-send" onclick="sendPrompt('${agent.name}')">RE-SPAWN</button>
         <button onclick="openOutputViewer('${agent.name}')">VIEW OUTPUT</button>
         <button class="btn-clear" onclick="confirmCleanup('${agent.name}')">CLEAR</button>
@@ -1666,6 +1680,7 @@ function renderCard(agent) {
 async function spawnAgent() {
   const projectPath = document.getElementById('spawnProject').value.trim();
   const prompt = document.getElementById('spawnPrompt').value.trim();
+  const model = document.getElementById('spawnModel').value;
 
   if (!projectPath || !prompt) {
     alert('Project path and prompt are required');
@@ -1676,7 +1691,7 @@ async function spawnAgent() {
     const res = await fetch('/api/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectPath, prompt }),
+      body: JSON.stringify({ projectPath, prompt, model: model || undefined }),
     });
     const data = await res.json();
     if (data.error) {
@@ -1722,6 +1737,24 @@ async function sendPrompt(agentName) {
   }
 }
 
+async function resumeAgent(agentName) {
+  try {
+    const res = await fetch(`/api/agents/${agentName}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      alert('Resume failed: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    fetchAgents();
+  } catch (e) {
+    console.error('Resume error:', e);
+    alert('Resume failed: ' + e.message);
+  }
+}
+
 async function sendKey(agentName, key) {
   try {
     await fetch(`/api/agents/${agentName}/keys`, {
@@ -1764,21 +1797,41 @@ async function uploadFile(agentName, input) {
   input.value = '';
 }
 
-function copyAttach(agentName) {
+async function openTerminal(agentName) {
+  const btns = document.querySelectorAll(`[data-name="${agentName}"] .card-actions button`);
+  let btn;
+  for (const b of btns) {
+    if (b.textContent === 'TERMINAL') { btn = b; break; }
+  }
+  try {
+    const res = await fetch(`/api/agents/${agentName}/terminal`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).error);
+    if (btn) {
+      btn.textContent = 'OPENED!';
+      btn.style.borderColor = 'var(--green)';
+      btn.style.color = 'var(--green)';
+      setTimeout(() => { btn.textContent = 'TERMINAL'; btn.style.borderColor = ''; btn.style.color = ''; }, 1500);
+    }
+  } catch (e) {
+    if (btn) {
+      btn.textContent = 'FAILED';
+      btn.style.borderColor = 'var(--red)';
+      btn.style.color = 'var(--red)';
+      setTimeout(() => { btn.textContent = 'TERMINAL'; btn.style.borderColor = ''; btn.style.color = ''; }, 2000);
+    }
+  }
+}
+
+function copyTmux(agentName) {
   const cmd = `tmux attach -t ${agentName}`;
   navigator.clipboard.writeText(cmd).then(() => {
-    // Brief visual feedback on the button
     const btns = document.querySelectorAll(`[data-name="${agentName}"] .card-actions button`);
     for (const btn of btns) {
-      if (btn.textContent === 'TERMINAL') {
+      if (btn.textContent === 'COPY TMUX') {
         btn.textContent = 'COPIED!';
         btn.style.borderColor = 'var(--green)';
         btn.style.color = 'var(--green)';
-        setTimeout(() => {
-          btn.textContent = 'TERMINAL';
-          btn.style.borderColor = '';
-          btn.style.color = '';
-        }, 1500);
+        setTimeout(() => { btn.textContent = 'COPY TMUX'; btn.style.borderColor = ''; btn.style.color = ''; }, 1500);
         break;
       }
     }
@@ -1877,7 +1930,9 @@ async function openOutputViewer(agentName) {
   document.getElementById('outputTitle').textContent =
     `OUTPUT: ${agent ? agent.label : agentName}`;
   document.getElementById('outputOverlay').classList.add('active');
-  document.getElementById('outputPromptInput').value = '';
+  const promptInput = document.getElementById('outputPromptInput');
+  promptInput.value = '';
+  promptInput.style.height = 'auto';
 
   // Resize tmux pane to match output container width
   const container = document.getElementById('outputContent');
@@ -1931,64 +1986,40 @@ function updateOutputKeyControls() {
   let pType = agent ? agent.promptType : null;
 
   if (!pType) {
-    // Detect from the output content text directly
     const outputEl = document.getElementById('outputContent');
     if (outputEl) {
       pType = detectPromptTypeFromText(outputEl.textContent || '');
     }
   }
 
-  if (!pType) {
-    kcEl.style.display = 'none';
-    return;
-  }
-
-  let buttons = '';
+  // Always render base buttons (shown on mobile via CSS)
+  // Add label + extras only when a prompt type is detected (shown on desktop)
+  let label = '';
+  let extras = '';
   if (pType === 'select') {
-    buttons = `
-      <span class="kc-label">SELECT:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selection">ENTER</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">SELECT:</span>`;
   } else if (pType === 'multiselect') {
-    buttons = `
-      <span class="kc-label">MULTI-SELECT:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Space')" title="Toggle selection">SPACE</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selections">ENTER</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">MULTI-SELECT:</span>`;
+    extras = `<button onclick="sendKeyFromOutput('Space')" title="Toggle selection">SPACE</button>`;
   } else if (pType === 'permission') {
-    buttons = `
-      <span class="kc-label">PERMISSION:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm">ENTER</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">PERMISSION:</span>`;
   } else if (pType === 'plan') {
-    buttons = `
-      <span class="kc-label">PLAN:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm selection">ENTER</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>
-      <span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
+    label = `<span class="kc-label">PLAN:</span>`;
+    extras = `<span style="color:var(--dim);font-size:10px;margin-left:4px">&middot; or type feedback below</span>`;
   } else if (pType === 'yesno') {
-    buttons = `
-      <span class="kc-label">CONFIRM:</span>
-      <button onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
-      <button onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
-      <button onclick="sendKeyFromOutput('Enter')" title="Confirm">ENTER</button>
-      <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+    label = `<span class="kc-label">CONFIRM:</span>`;
   }
 
-  if (buttons) {
-    kcEl.innerHTML = buttons;
-    kcEl.style.display = 'flex';
-  } else {
-    kcEl.style.display = 'none';
-  }
+  kcEl.innerHTML = `
+    ${label}
+    <button class="kc-select" onclick="sendKeyFromOutput('Up')" title="Move up">&#x2191;</button>
+    <button class="kc-select" onclick="sendKeyFromOutput('Down')" title="Move down">&#x2193;</button>
+    ${extras}
+    <button onclick="sendKeyFromOutput('Tab')" title="Next option">TAB</button>
+    <button onclick="sendKeyFromOutput('Escape')" title="Cancel">ESC</button>`;
+
+  // On desktop, only show when a prompt type is detected
+  kcEl.classList.toggle('kc-active', !!pType);
 
   // Update output prompt placeholder based on prompt type
   const outputInput = document.getElementById('outputPromptInput');
@@ -2016,12 +2047,53 @@ function closeOutputViewer() {
   }
 }
 
+function handleOutputInputKeydown(event) {
+  const textarea = event.target;
+  const isEmpty = textarea.value.trim() === '';
+
+  // Shift+Enter: insert newline (default textarea behavior)
+  if (event.key === 'Enter' && event.shiftKey) {
+    // Allow default — inserts newline
+    setTimeout(() => autoResizeTextarea(textarea), 0);
+    return;
+  }
+
+  // Enter (no shift): send message or forward to tmux if empty
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (isEmpty) {
+      sendKeyFromOutput('Enter');
+    } else {
+      sendFromOutput();
+    }
+    return;
+  }
+
+  // When input is empty, forward navigation keys directly to tmux
+  if (isEmpty && ['ArrowUp', 'ArrowDown', 'Tab', 'Backspace', 'Escape'].includes(event.key)) {
+    event.preventDefault();
+    const keyMap = { ArrowUp: 'Up', ArrowDown: 'Down', Tab: 'Tab', Backspace: 'BSpace', Escape: 'Escape' };
+    sendKeyFromOutput(keyMap[event.key]);
+    return;
+  }
+
+  // Auto-resize on any other input
+  setTimeout(() => autoResizeTextarea(textarea), 0);
+}
+
+function autoResizeTextarea(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  textarea.style.overflowY = textarea.scrollHeight > 120 ? 'auto' : 'hidden';
+}
+
 async function sendFromOutput() {
   if (!currentOutputAgent) return;
   const input = document.getElementById('outputPromptInput');
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
+  autoResizeTextarea(input);
 
   // Check if plan prompt is active - route to plan-feedback endpoint
   const agent = agents.find(a => a.name === currentOutputAgent);
@@ -2250,9 +2322,7 @@ function onDrop(event) {
 // ─── KEYBOARD SHORTCUTS ───────────────────────────────────────────────
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
-    if (document.getElementById('outputOverlay').classList.contains('active')) {
-      closeOutputViewer();
-    } else if (document.getElementById('spawnModal').classList.contains('active')) {
+    if (document.getElementById('spawnModal').classList.contains('active')) {
       closeSpawnModal();
     } else if (document.getElementById('confirmOverlay').classList.contains('active')) {
       closeConfirm();
